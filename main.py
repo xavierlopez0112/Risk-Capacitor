@@ -1,15 +1,15 @@
 import yfinance as yf
 import numpy as np
-import matplotlib.pyplot as plt
 import sympy as sym
+import matplotlib.pyplot as plt
 import scipy as sci
 import pandas as pd
 import os
+import sys
 import openai
 import requests
 import traceback
 import warnings
-import torch
 import time
 import feedparser
 import ssl
@@ -23,6 +23,8 @@ from urllib.parse import quote_plus
 from transformers import pipeline
 from scipy.interpolate import CubicSpline, BSpline, splrep, splev
 from sklearn.model_selection import KFold
+from scipy import stats
+from arch import arch_model
 load_dotenv()
 warnings.filterwarnings('ignore')
 
@@ -30,7 +32,7 @@ warnings.filterwarnings('ignore')
 
 
 pipe = pipeline("text-classification", model="ProsusAI/finbert")
-print(pipe('Stocks rallied and the British pound gained.'))
+
 
 s = Screener()
 openai.api_key=os.getenv("OPENAIAPI_KEY")
@@ -393,70 +395,209 @@ def gbm_simulation(S0, mu, sigma, T, dt, n_simulations=1000):
     return simulations
 
 def garch_volatility_forecast(log_returns, forecast_days=30):
-    """
-    Simple GARCH(1,1) implementation for time-varying volatility
-    This is a simplified version - for production use arch package
-    """
+
     try:
-        # Estimate GARCH(1,1) parameters using method of moments (simplified)
-        returns = log_returns - np.mean(log_returns)
-        
-        # Initial estimates
-        omega = np.var(returns) * 0.1  # Long-run variance component
-        alpha = 0.1  # ARCH parameter
-        beta = 0.8   # GARCH parameter
-        
-        # Ensure stationarity constraint
-        if alpha + beta >= 1:
-            alpha = 0.05
-            beta = 0.9
-            
-        # Calculate conditional variances
-        n = len(returns)
-        cond_var = np.zeros(n)
-        cond_var[0] = np.var(returns)
-        
-        for t in range(1, n):
-            cond_var[t] = omega + alpha * returns[t-1]**2 + beta * cond_var[t-1]
-        
-        # Forecast volatility
-        last_return = returns[-1]
-        last_var = cond_var[-1]
-        
-        forecasted_vars = np.zeros(forecast_days)
-        forecasted_vars[0] = omega + alpha * last_return**2 + beta * last_var
-        
-        # Multi-step ahead forecast
-        for t in range(1, forecast_days):
-            forecasted_vars[t] = omega + (alpha + beta) * forecasted_vars[t-1]
-        
-        forecasted_vol = np.sqrt(forecasted_vars)
-        
+        returns_pct = log_returns * 100
+
+        model = arch_model(
+            returns_pct,
+            vol='Garch',
+            p=1,
+            q=1,
+            mean='Zero',
+            dist='normal'
+        )
+        fitted_model = model.fit(disp='off', show_warning=False)
+        omega = fitted_model.params['omega']
+        alpha = fitted_model.params['alpha[1]']
+        beta = fitted_model.params['beta[1]']
+
+        cond_var = fitted_model.conditional_volatility ** 2
+
+        forecast = fitted_model.forecast(horizon = forecast_days)
+        forecasted_vars = forecast.variance.values[-1, :]
+
+        forecasted_vol = np.sqrt(forecasted_vars) / 100
+        cond_var_original = cond_var ** 2 / 10000
+
+        print(f"\nGARCH(1,1) Parameters (arch package):")
+        print(f"  ω (omega): {omega:.6f}")
+        print(f"  α (alpha): {alpha:.6f}")
+        print(f"  β (beta): {beta:.6f}")
+        print(f"  Persistence (α+β): {alpha + beta:.6f}")
+        print(f"  AIC: {fitted_model.aic:.2f}")
+        print(f"  BIC: {fitted_model.bic:.2f}")
+
         return {
-            'conditional_variances': cond_var,
+            'conditional_variance': cond_var_original,
             'forecasted_volatility': forecasted_vol,
             'omega': omega,
             'alpha': alpha,
             'beta': beta,
-            'avg_forecast_vol': np.mean(forecasted_vol)
+            'avg_forecasted_vol': np.mean(forecasted_vol),
+            'fitted_model': fitted_model,
+            'method': 'arch_package'
+        }
+    except Exception as e:
+        print(f"Garch estimation with ARCH failed: {e}")
+
+        try:
+            returns = log_returns - np.mean(log_returns)
+            omega = np.var(returns) * 0.1
+            alpha = 0.1
+            beta = 0.8
+            if alpha + beta >= 1:
+                alpha = 0.05
+                beta = 0.9
+                
+            n = len(returns)
+            cond_var = np.zeros(n)
+            cond_var[0] = np.var(returns)
+            
+            for t in range(1, n):
+                cond_var[t] = omega + alpha * returns[t-1]**2 + beta * cond_var[t-1]
+            
+            # Forecast volatility
+            last_return = returns[-1]
+            last_var = cond_var[-1]
+            
+            forecasted_vars = np.zeros(forecast_days)
+            forecasted_vars[0] = omega + alpha * last_return**2 + beta * last_var
+            
+            # Multi-step ahead forecast
+            for t in range(1, forecast_days):
+                forecasted_vars[t] = omega + (alpha + beta) * forecasted_vars[t-1]
+            
+            forecasted_vol = np.sqrt(forecasted_vars)
+            
+            return {
+                'conditional_variances': cond_var,
+                'forecasted_volatility': forecasted_vol,
+                'omega': omega,
+                'alpha': alpha,
+                'beta': beta,
+                'avg_forecast_vol': np.mean(forecasted_vol)
+            }
+            
+        except Exception as e:
+            print(f"GARCH estimation failed: {e}")
+            # Fallback to constant volatility
+            constant_vol = np.std(log_returns)
+            return {
+                'conditional_variances': None,
+                'forecasted_volatility': np.full(forecast_days, constant_vol),
+                'omega': None,
+                'alpha': None,
+                'beta': None,
+                'avg_forecast_vol': constant_vol
+            }
+def garch_volatility_forecast_enhanced(log_returns, forecast_days = 30, p=1, q=1, dist='normal'):
+    try:
+        returns_pct = log_returns * 100
+        model = arch_model(
+            returns_pct,
+            vol='Garch',
+            p=p,
+            q=q,
+            mean='Zero',
+            dist=dist
+        )
+
+        fitted_model = model.fit(disp='off', show_warning=False)
+        forecast = fitted_model.forecast(horizon=forecast_days)
+        forecasted_vars = forecast.variance.values[-1, :]
+        forecasted_vol = np.sqrt(forecasted_vars) / 100
+
+        params_dict = {
+            'omega': fitted_model.params['omega'] 
+        }
+        for i in range(1, p + 1):
+            params_dict[f'alpha[{i}]'] = fitted_model.params[f'alpha[{i}]']
+        
+        for i in range(1, q + 1):
+            params_dict[f'beta[{i}]'] = fitted_model.params[f'beta[{i}]']
+        
+        print(f"Garch({p},{q}) Parameters with {dist} distribution:")
+        for param, value in params_dict.items():
+            print(f"  {param}: {value:.6f}")
+        print(f"AIC: {fitted_model.aic:.2f}")
+        print(f"BIC: {fitted_model.bic:.2f}")
+        
+        return {
+            'conditional_variances': fitted_model.conditional_volatility ** 2 / 10000,
+            'forecasted_volatility': forecasted_vol,
+            'parameters': params_dict,
+            'avg_forecast_vol': np.mean(forecasted_vol),
+            'fitted_model': fitted_model,
+            'model_spec': f'GARCH({p},{q})',
+            'distribution': dist,
+            'method': 'arch_package_advanced'
         }
         
     except Exception as e:
-        print(f"GARCH estimation failed: {e}")
-        # Fallback to constant volatility
-        constant_vol = np.std(log_returns)
-        return {
-            'conditional_variances': None,
-            'forecasted_volatility': np.full(forecast_days, constant_vol),
-            'omega': None,
-            'alpha': None,
-            'beta': None,
-            'avg_forecast_vol': constant_vol
-        }
-        
+        print(f"Advanced GARCH estimation failed: {e}")
+        return garch_volatility_forecast(log_returns, forecast_days)
+def compare_garch_models(log_returns, forecast_days=30):
+
+    print("\n" + "="*70)
+    print("GARCH MODEL COMPARISON")
+    print("="*70)
+
+    models_to_test = [
+        {'p': 1, 'q': 1, 'dist': 'normal', 'name': 'GARCH(1,1) - Normal'},
+        {'p': 1, 'q': 1, 'dist': 't', 'name': 'GARCH(1,1) - Student-t'},
+        {'p': 1, 'q': 1, 'dist': 'skewt', 'name': 'GARCH(1,1) - Skewed-t'},
+        {'p': 2, 'q': 1, 'dist': 'normal', 'name': 'GARCH(2,1) - Normal'},
+        {'p': 1, 'q': 2, 'dist': 'normal', 'name': 'GARCH(1,2) - Normal'},
+        {'p': 2, 'q': 1, 'dist': 't', 'name': 'GARCH(2,1) - Student-t'},
+    ]
+    
+    results = []
+
+    for spec in models_to_test:
+        try:
+            result = garch_volatility_forecast_enhanced(log_returns, forecast_days = forecast_days, p=spec['p'], q=spec['q'], dist=spec['dist'])
+            if result['fitted_model'] is not None:
+                results.append({
+                    'name': spec['name'],
+                    'p': spec['p'],
+                    'q': spec['q'],
+                    'dist': spec['dist'],
+                    'aic': result['fitted_model'].aic,
+                    'bic': result['fitted_model'].bic,
+                    'log_likelihood': result['fitted_model'].loglikelihood,
+                    'avg_forecast_vol': result['avg_forecast_vol'],
+                    'result': result
+                })
+                print(f"Success - AIC: {result['fitted_model'].aic:.2f}, BIC: {result['fitted_model'].bic:.2f}")
+            else:
+                print(f"Failed - Model could not be estimated")
+                
+        except Exception as e:
+            print(f"  ✗ Failed - {str(e)[:50]}")
+            continue
+    
+    if not results:
+        print("All advanced models failed. Using simplified GARCH.")
+        return garch_volatility_forecast(log_returns, forecast_days)
+    df = pd.DataFrame(results)
+    df = df.sort_values('aic')
+
+    best_by_aic = results[df.index[0]]
+    best_by_bic = df.sort_values('bic').iloc[0]
+    
+    print("\n" + "="*70)
+    print("RECOMMENDATION")
+    print("="*70)
+    print(f"Best by AIC: {best_by_aic['name']}")
+    print(f"Best by BIC: {best_by_bic['name']}")
+    return best_by_aic['result'], df
 
 
-def stochastic_analysis(analysis_result, n_simulations=1000, forecast_days = 30):
+    
+
+
+def stochastic_analysis(analysis_result, n_simulations=1000, forecast_days = 30, compare_models=False):
     try:
         closing_prices = analysis_result['closing_prices']
         symbol = analysis_result['symbol']
@@ -471,14 +612,27 @@ def stochastic_analysis(analysis_result, n_simulations=1000, forecast_days = 30)
         print(f"  Annual drift: {gbm_params['mu_annual']:.2%}")
         print(f"  Annual volatility: {gbm_params['sigma_annual']:.2%}")
 
-        garch_result = garch_volatility_forecast(gbm_params['log_returns'], forecast_days)
-
-        if garch_result != None:
+        if compare_models:
+            best_garch, comparison_df = compare_garch_models(gbm_params['log_returns'], forecast_days)
+            garch_result = best_garch
+        else:
+            garch_result = garch_volatility_forecast(gbm_params['log_returns'], forecast_days)
+            comparison_df= None
+        has_valid_garch = False
+        if isinstance(garch_result, dict):
+            forecasted_vol = garch_result.get('forecasted_volatility')
+            if forecasted_vol is not None:
+                try:
+                    vol_length = len(forecasted_vol)
+                    has_valid_garch = vol_length > 0
+                except:
+                    has_valid_garch = False
+        if has_valid_garch:
             simulations = np.zeros((n_simulations, forecast_days + 1))
             simulations[:, 0] = current_price
 
             for t in range(1, forecast_days + 1):
-                vol = garch_result['forecasted_volatility'][t-1]
+                vol = best_garch['forecasted_volatility'][t-1]
                 random_shocks = np.random.normal(0,1,n_simulations)
                 drift = (gbm_params['mu_daily'] - 0.5 * vol**2)
                 diffusion = vol * random_shocks
@@ -530,7 +684,7 @@ def stochastic_analysis(analysis_result, n_simulations=1000, forecast_days = 30)
         return {
             'simulations': simulations,
             'gbm_params': gbm_params,
-            'garch_result': garch_result,
+            'best_garch': best_garch,
             'forecast_stats': forecast_stats,
             'final_stats': final_stats,
             'forecast_days': forecast_days,
@@ -666,8 +820,14 @@ def enhanced_stock_analysis(symbol, user_prompt=None, company_name=None):
 
     if stochastic_result is None:
         return None
+    risk_metrics = calculate_comprehensive_risk_metrics(stochastic_result, result)
+    if risk_metrics:
+        print_risk_report(risk_metrics)
+
     plot_stock_analysis(result)
     plot_fan_chart(result,stochastic_result)
+    if risk_metrics:
+        plot_risk_metrics_dashboard(risk_metrics, result, stochastic_result)
 
     enhanced_result = result.copy()
     enhanced_result['stochastic'] = stochastic_result
@@ -724,7 +884,7 @@ def analyze_stock(symbol, user_prompt=None, company_name=None):
                 
                 turning_points = []
                 for i in range(1, len(first_deriv_values)):
-                    if np.sign(first_deriv_values[i-1]) != np.sign(first_deriv_values[i]):
+                    if np.sign(first_deriv_values[i-1]) is not np.sign(first_deriv_values[i]):
                         turning_points.append(i)
                 
                 models[f'Polynomial_deg_{degree}'] = {
@@ -782,7 +942,7 @@ def analyze_stock(symbol, user_prompt=None, company_name=None):
 
                 turning_points = []
                 for i in range(len(first_deriv_values)):
-                    if np.sign(first_deriv_values[i-1]) != np.sign(first_deriv_values[i]):
+                    if np.sign(first_deriv_values[i-1]) is not np.sign(first_deriv_values[i]):
                         turning_points.append(i)
                 models['CubicSpline'] = {
                 'model': cs,
@@ -864,7 +1024,7 @@ def analyze_stock(symbol, user_prompt=None, company_name=None):
 
                 turning_points = []
                 for i in range(1, len(first_deriv_values)):
-                    if np.sign(first_deriv_values[i-1]) != np.sign(first_deriv_values[i]):
+                    if np.sign(first_deriv_values[i-1]) is np.sign(first_deriv_values[i]):
                         turning_points.append(i)
                 
                 models[f'BSpline_s_{s_factor}'] = {
@@ -1169,6 +1329,320 @@ def plot_stock_analysis(result):
         print(f"Error plotting stock analysis: {e}")
         traceback.print_exc()
 
+def calculate_comprehensive_risk_metrics(stochastic_result, analysis_result,risk_free_rate = 0.0418):
+    try:
+        simulations = stochastic_result['simulations']
+        current_price = analysis_result['current_price']
+        forecast_days = stochastic_result['forecast_days']
+        symbol = analysis_result['symbol']
+
+        final_prices = simulations[:, -1]
+        returns = (final_prices - current_price) / current_price
+        returns_pct = returns * 100
+        
+        daily_rf_rate = (1 + risk_free_rate) ** (1/252) -1
+        var_levels = [1,5,10]
+        var_metrics = {}
+        for level in var_levels:
+            var_value = np.percentile(returns_pct, level)
+            var_price = current_price * (1 + var_value/100)
+            var_metrics[f'VaR_{level}%'] = {
+                'return_pct': var_value,
+                'price': var_price,
+                'loss_amount': var_price - current_price
+            }
+
+        cvar_metrics = {}
+        for level in var_levels:
+            threshold = np.percentile(returns_pct, level)
+            tail_losses = returns_pct[returns_pct <= threshold]
+            cvar_value = np.mean(tail_losses) if len(tail_losses) > 0 else threshold
+            cvar_price = current_price * (1 + cvar_value/100)
+            cvar_metrics[f'CVaR_{level}%'] = {
+                'return_pct': cvar_value,
+                'price': cvar_price,
+                'loss_amount': cvar_price - current_price,
+            }
+        prob_metrics = {
+            'prob_profit': np.mean(final_prices > current_price),
+            'prob_loss_5pct': np.mean(final_prices < current_price * 0.95),
+            'prob_loss_10pct': np.mean(final_prices < current_price * 0.90),
+            'prob_loss_20pct': np.mean(final_prices < current_price * 0.80),
+            'prob_gain_5pct': np.mean(final_prices > current_price * 1.05),
+            'prob_gain_10pct': np.mean(final_prices > current_price * 1.10),
+            'prob_gain_20pct': np.mean(final_prices > current_price * 1.20),
+            'prob_gain_50pct': np.mean(final_prices > current_price * 1.50),
+        }
+
+        max_drawdowns = []
+        for sim_path in simulations:
+            running_max = np.maximum.accumulate(sim_path)
+            drawdown = (sim_path - running_max) / running_max
+            max_dd = np.min(drawdown)
+            max_drawdowns.append(max_dd)
+
+        max_drawdown_metrics = {
+            'avg_max_drawdown': np.mean(max_drawdowns) * 100,
+            'worst_max_drawdown': np.min(max_drawdowns) * 100,
+            'median_max_drawdown': np.median(max_drawdowns) * 100,
+            '95th_percentile_drawdown': np.percentile(max_drawdowns, 5) * 100
+        }
+
+        daily_returns_all = []
+        for sim_path in simulations:
+            daily_rets = np.diff(sim_path) / sim_path[:-1]
+            daily_returns_all.append(daily_rets)
+
+        daily_returns_all = np.array(daily_returns_all)
+        avg_daily_return = np.mean(daily_returns_all)
+        std_daily_return = np.std(daily_returns_all)
+
+        sharpe_ratio = (avg_daily_return - daily_rf_rate) / std_daily_return if std_daily_return > 0 else 0
+        annualized_sharpe = sharpe_ratio * np.sqrt(252)
+
+        downside_returns = daily_returns_all[daily_returns_all < daily_rf_rate]
+        downside_std = np.std(downside_returns) if len(downside_returns) > 0 else std_daily_return
+
+        sortino_ratio = (avg_daily_return - daily_rf_rate) / downside_std if downside_std > 0 else 0
+        annualized_sortino = sortino_ratio * np.sqrt(252)
+
+        expected_return = np.mean(returns_pct)
+        expected_loss_if_negative = np.mean(returns_pct[returns_pct < 0]) if np.any(returns_pct < 0) else 0
+        expected_gain_if_positive = np.mean(returns_pct[returns_pct < 0]) if np.any(returns_pct > 0) else 0
+
+        gain_to_loss_ratio = abs(expected_gain_if_positive / expected_loss_if_negative) if expected_loss_if_negative is not 0 else float('inf')
+
+        volatility_metrics = {
+            'return_std': np.std(returns_pct),
+            'return_variance': np.var(returns_pct),
+            'annualized_volatility': np.std(returns_pct) * np.sqrt(252/forecast_days),
+            'coefficient_of_variation': np.std(returns_pct) / np.mean(returns_pct) if np.mean(returns_pct) is not 0 else float('inf')
+        }
+        risk_metrics = {
+            'symbol': symbol,
+            'current_price': current_price,
+            'forecast_days': forecast_days,
+            'n_simulations': len(simulations),
+
+            'var': var_metrics,
+            'cvar': cvar_metrics,
+            'probability_targets': prob_metrics,
+            'max_drawdown': max_drawdown_metrics,
+
+            'sharpe_ratio': sharpe_ratio,
+            'sortino_ratio': annualized_sortino,
+            'daily_sharpe': sharpe_ratio,
+            'daily_sortino': sortino_ratio,
+
+            'expected_return_pct': expected_return,
+            'expected_loss_if_negative': expected_loss_if_negative,
+            'expected_gain_if_positive': expected_gain_if_positive,
+            'gain_to_loss_ratio': gain_to_loss_ratio,
+
+            'volatility': volatility_metrics,
+
+            'return_distribution': {
+                'mean': np.mean(returns_pct),
+                'median': np.median(returns_pct),
+                'std': np.std(returns_pct),
+                'skewness': pd.Series(returns_pct).skew(),
+                'kurtosis': pd.Series(returns_pct).kurtosis()
+            }
+        }
+        return risk_metrics
+    except Exception as e:
+        print(f'Error calculating risk metrics: {e}')
+        traceback.print_exc()
+        return None
+
+def print_risk_report(risk_metrics):
+    if not risk_metrics:
+        print("No Risk Metrics Available")
+        return
+    try:
+        symbol = risk_metrics.get('symbol','Unknown')
+        current_price = risk_metrics.get('current_price',0)
+        forecast_days = risk_metrics.get('forecast_days',0)
+
+        print(f"\n{'='*80}")
+        print(f"Comprehensive Risk Analysis Report: {symbol}")
+        print(f"\n{'='*80}")
+        print(f"Current Price: ${current_price:.2f} | Forecast Horizon: {forecast_days} days")
+        print(f"Simulations: {risk_metrics.get('n_simulations',0):,}\n")
+        if 'var' in risk_metrics:
+            print(f"{'Value at Risk (VaR)':-^80}")
+            print(f"{'Confidence':<15} {'Return %':<15} {'Price':<15} {'Loss Amount'}")
+            print("-" * 80)
+            for level, metrics in risk_metrics['var'].items():
+                print(f"{level:<15} {metrics['return_pct']:>12.2f}% ${metrics['price']:>12.2f} ${metrics['loss_amount']:>12.2f}")
+        if 'cvar' in risk_metrics:
+            print(f"\n{'Conditional Value at Risk (CVaR / Expected Shortfall)':-^80}")
+            print(f"{'Confidence':<15} {'Return %':<15} {'Price':<15} {'Loss Amount'}")
+            print("-" * 80)
+            for level, metrics in risk_metrics['cvar'].items():
+                print(f"{level:<15} {metrics['return_pct']:>12.2f}% ${metrics['price']:>12.2f} ${metrics['loss_amount']:>12.2f}")
+        
+        if 'probability_targets' in risk_metrics:
+            print(f"\n{'Probability of Targets':-^80}")
+            prob = risk_metrics['probability_targets']
+            print(f"Probability of ANY profit:        {prob['prob_profit']:>6.1%}")
+            print(f"Probability of >5% gain:          {prob['prob_gain_5pct']:>6.1%}")
+            print(f"Probability of >10% gain:         {prob['prob_gain_10pct']:>6.1%}")
+            print(f"Probability of >20% gain:         {prob['prob_gain_20pct']:>6.1%}")
+            print(f"Probability of >5% loss:          {prob['prob_loss_5pct']:>6.1%}")
+            print(f"Probability of >10% loss:         {prob['prob_loss_10pct']:>6.1%}")
+            print(f"Probability of >20% loss:         {prob['prob_loss_20pct']:>6.1%}")
+        if 'max_drawdown' in risk_metrics:
+            print(f"\n{'Maximum Drawdown':-^80}")
+            dd = risk_metrics['max_drawdown']
+            print(f"Average Max Drawdown:             {dd.get('avg_max_drawdown',0):>6.2f}%")
+            print(f"Median Max Drawdown:              {dd.get('median_max_drawdown',0):>6.2f}%")
+            print(f"Worst Max Drawdown:               {dd.get('worst_max_drawdown',0):>6.2f}%")
+            print(f"95th Percentile Drawdown:         {dd.get('95th_percentile_drawdown',0):>6.2f}%")
+        
+        print(f"\n{'Risk-Adjusted Performance':-^80}")
+        print(f"Sharpe Ratio (Annualized):        {risk_metrics.get('sharpe_ratio',0):>6.3f}")
+        print(f"Sortino Ratio (Annualized):       {risk_metrics.get('sortino_ratio',0):>6.3f}")
+        print(f"Expected Return:                  {risk_metrics.get('expected_return_pct',0):>6.2f}%")
+
+        gain_loss = risk_metrics.get('gain_to_loss_ratio',0)
+        if gain_loss == float('inf'):
+            print(f"Gain/Loss Ratio:                  {'∞':>6}")
+        else:
+            print(f"Gain/Loss Ratio:                  {gain_loss:>6.2f}x")
+            
+        if 'volatility' in risk_metrics:
+            print(f"\n{'Volatility Metrics':-^80}")
+            vol = risk_metrics['volatility']
+            print(f"Return Std Dev:                   {vol.get('return_std', 0):>6.2f}%")
+            print(f"Annualized Volatility:            {vol.get('annualized_volatility', 0):>6.2f}%")
+        
+        print(f"\n{'='*80}\n")
+    except Exception as e:
+        print(f"Error Printing Risk Metrics: {e}")
+        traceback.print_exc()
+
+
+def plot_risk_metrics_dashboard(risk_metrics, analysis_result, stochastic_result):
+    try:
+        simulations = stochastic_result['simulations']
+        current_price = analysis_result['current_price']
+        symbol = analysis_result['symbol']
+
+        final_prices = simulations[:, -1]
+        returns_pct = ((final_prices - current_price) / current_price) * 100
+
+        fig = plt.figure(figsize=(18,12))
+        gs = fig.add_gridspec(3, 3, hspace = 0.3, wspace = 0.3)
+        
+        ax1 = fig.add_subplot(gs[0, 0])
+        var_levels = ['VaR_1%', 'VaR_5%', 'VaR_10%']
+        var_values = [risk_metrics['var'][k]['return_pct'] for k in var_levels]
+        cvar_values = [risk_metrics['cvar'][k.replace('VaR', 'CVaR')]['return_pct'] for k in var_levels]
+
+        x = np.arange(len(var_levels))
+        width = 0.35
+        ax1.bar(x - width/2, var_values, width, label = 'VaR', alpha=0.8, color = 'orange')
+        ax1.bar(x + width/2, cvar_values, width, label = 'CVaR', alpha = 0.8, color = 'red')
+        ax1.set_xlabel('Confidence Level')
+        ax1.set_ylabel('Return (%')
+        ax1.set_title('VaR vs CVaR Comparison')
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(['99%', '95%', '90%'])
+        ax1.legend()
+        ax1.grid(True, alpha = 0.3)
+        ax1.axhline(y=0, color = 'black', linestyle='--', linewidth = 0.8)
+
+        ax2 = fig.add_subplot(gs[0,1])
+        prob = risk_metrics['probability_targets']
+        targets = ['5% Gain', '10% Gain', '20% Gain', '5% Loss', '10% Loss', '20% Loss']
+        probs = [prob['prob_gain_5pct'], prob['prob_gain_10pct'], prob['prob_gain_20pct'], 
+                 prob['prob_loss_5pct'], prob['prob_loss_10pct'], prob['prob_loss_20pct']]
+        colors_probs = ['green', 'darkgreen', 'lime', 'orange', 'red', 'darkred']
+
+        bars = ax2.barh(targets, probs, color=colors_probs, alpha=0.7)
+        ax2.set_xlabel('Probability')
+        ax2.set_title('Target Probability Distribution')
+        ax2.set_xlim(0, 1)
+        for i, (bar,p) in enumerate(zip(bars, probs)):
+            ax2.text(p + 0.02, i,f'{p:.1%}', va='center')
+        ax2.grid(True, alpha=0.3, axis='x')
+
+        ax3 = fig.add_subplot(gs[0,2])
+        max_drawdowns = []
+        for sim_path in simulations:
+            running_max = np.maximum.accumulate(sim_path)
+            drawdown = (sim_path - running_max) / running_max
+            max_dd = np.min(drawdown) * 100
+            max_drawdowns.append(max_dd)
+
+        ax3.hist(max_drawdowns, bins=50, alpha = 0.7, color='purple', edgecolor='black')
+        ax3.axvline(risk_metrics['max_drawdown']['avg_max_drawdown'], color='red', linestyle='--',linewidth=2, label='Average')
+        ax3.axvline(risk_metrics['max_drawdown']['worst_max_drawdown'], color='darkred', linestyle=':',linewidth=2,label = 'Worst')
+        ax3.set_xlabel('Max Drawdown (%)')
+        ax3.set_ylabel('Frequency')
+        ax3.set_title('Maximum Drawdown Distribution')
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+
+        ax4 = fig.add_subplot(gs[1, :])
+        ax4.hist(returns_pct, bins=100, alpha=0.6, color='skyblue', edgecolor='black', density=True)
+        ax4.axvline(0, color='black', linestyle='--', linewidth=2, label='Break-even')
+        ax4.axvline(risk_metrics['expected_return_pct'], color ='green',
+                     linestyle='-', linewidth=2, label=f'Expected: {risk_metrics["expected_return_pct"]:.2f}')
+        for level in ['VaR_1%', 'VaR_5%', 'VaR_10%']:
+            var_val = risk_metrics['var'][level]['return_pct']
+            ax4.axvline(var_val, color='red',linestyle=':', alpha=0.7, linewidth=1.5)
+            ax4.text(var_val, ax4.get_ylim()[1]*0.9, level, rotation=90, va='top', fontsize=8)
+
+        ax4.set_xlabel('Return (%)')
+        ax4.set_ylabel('Probability Density')
+        ax4.set_title(f'{symbol} - Return Distribution with Risk Metrics')
+        ax4.legend()
+        ax4.grid(True, alpha=0.3)
+
+        ax5 = fig.add_subplot(gs[2,0])
+        metrics_names = ['Sharpe\nRatio', 'Sortino\nRatio', 'Gain/Loss\nRatio']
+        metrics_values = [risk_metrics['sharpe_ratio'],
+                          risk_metrics['sortino_ratio'],
+                          min(risk_metrics['gain_to_loss_ratio'],5)]
+        color_metrics= ['blue' if v> 0 else 'red' for v in metrics_values]
+        bars = ax5.bar(metrics_names, metrics_values, color=color_metrics, alpha=0.7)
+        ax5.set_ylabel('Ratio Value')
+        ax5.set_title('Risk-Adjusted Performance')
+        ax5.axhline(y=0, color='black',linestyle='-',linewidth=0.8)
+        ax5.grid(True, alpha=0.3, axis='y')
+        for bar,val in zip(bars, metrics_values):
+            height = bar.get_height()
+            ax5.text(bar.get_x() + bar.get_width()/2., height,
+                     f'{val:.2f}', ha='center', va='bottom' if height > 0 else 'top')
+            
+        ax6 = fig.add_subplot(gs[2,1:])
+        avg_path = np.mean(simulations,axis=0)
+        running_max = np.maximum.accumulate(avg_path)
+        drawdown_path = (avg_path - running_max) / running_max * 100
+        
+        days = np.arange(len(avg_path))
+        ax6.fill_between(days, drawdown_path, 0,alpha=0.5,color='red', label='Drawdown')
+        ax6.plot(days, drawdown_path, color='darkred', linewidth=2)
+        ax6.set_xlabel('Trading Days')
+        ax6.set_ylabel('Drawdown (%)')
+        ax6.set_title('Average Drawdown Path')
+        ax6.legend()
+        ax6.grid(True, alpha = 0.3)
+        ax6.axhline(y=0, color='black', linestyle = '-', linewidth=0.8)
+
+        plt.suptitle(f'{symbol} - Comprehensive Risk Metrics Dashboard', fontsize=16, fontweight='bold', y=0.995)
+        plt.show()
+    except Exception as e:
+        print(f"Failed to plot Risk Metrics Dashboard: {e}")
+        traceback.print_exc()
+
+            
+
+
+
+
 
 def manual_analysis():
     while True:
@@ -1204,10 +1678,18 @@ def manual_analysis():
                 traceback.print_exc()
 
             do_stochastic = input("Run stochastic analysis? (y/n, default=y): ").strip().lower()
-            if do_stochastic !='n':
+            if do_stochastic is not 'n':
                 try:
-                    stochastic_result= stochastic_analysis(result,n_simulations=3000)
+                    stochastic_result= stochastic_analysis(result,n_simulations=3000, compare_models=True)
                     if stochastic_result:
+                        if 'model_comparison' in stochastic_result:
+                            best_model_name = stochastic_result['model_comparison'].iloc[0]['name']
+                            best_aic = stochastic_result['model_comparison'].iloc[0]['aic']
+                            print(f"Best GARCH Model: {best_model_name} (AIC: {best_aic}")
+                        risk_metrics = calculate_comprehensive_risk_metrics(stochastic_result, result)
+                        if risk_metrics:
+                            print_risk_report(risk_metrics)
+                            plot_risk_metrics_dashboard(risk_metrics, result, stochastic_result)
                         plot_fan_chart(result, stochastic_result)
                     else:
                         print("Stochastic Analysis Failed")
