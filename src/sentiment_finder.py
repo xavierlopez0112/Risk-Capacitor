@@ -7,8 +7,16 @@ import urllib.request
 from urllib.parse import quote_plus
 from datetime import datetime, timedelta
 import os
+from dotenv import load_dotenv
+
+
+
 SENTIMENT_THRESHOLD=0.1
+newsapi_key=os.getenv("NEWSAPI_KEY")
+newsdata_api_key = os.getenv("NEWSDATA_API_KEY")
 finnhub_api_key=os.getenv("FINNHUB_API_KEY")
+load_dotenv()
+
 
 
 
