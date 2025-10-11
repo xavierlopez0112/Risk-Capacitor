@@ -228,7 +228,7 @@ def compare_garch_models(log_returns, forecast_days=30):
     
     if not results:
         print("All advanced models failed. Using simplified GARCH.")
-        return garch_volatility_forecast(log_returns, forecast_days)
+        return garch_volatility_forecast(log_returns, forecast_days=forecast_days)
     df = pd.DataFrame(results)
     df = df.sort_values('aic')
 
@@ -264,16 +264,22 @@ def stochastic_analysis(analysis_result, n_simulations=1000, forecast_days = 30,
         best_garch = None
         comparison_df = None
 
-        if compare_models:
+        use_garch_for_simulation = forecast_days <= 60
+
+
+        if use_garch_for_simulation and compare_models:
             result_tuple = compare_garch_models(gbm_params['log_returns'], forecast_days)
             if result_tuple and isinstance(result_tuple, tuple) and len(result_tuple) == 2:
                 best_garch, comparison_df = result_tuple
             else:
                 best_garch = result_tuple
             garch_result = best_garch
-        else:
+        elif use_garch_for_simulation:
             garch_result = garch_volatility_forecast(gbm_params['log_returns'], forecast_days)
             best_garch = garch_result
+        else:
+            best_garch=None
+            garch_result = None
         if best_garch is None or not isinstance(best_garch, dict):
             print("Warning: GARCH fitting failed, using constant volatility fallback")
             constant_vol = gbm_params['sigma_daily']
@@ -286,7 +292,7 @@ def stochastic_analysis(analysis_result, n_simulations=1000, forecast_days = 30,
                 'avg_forecast_vol': constant_vol
             }
         has_valid_garch = False
-        if isinstance(best_garch, dict):
+        if best_garch is not None and isinstance(best_garch,dict):
             forecasted_vol = best_garch.get('forecasted_volatility')
             if forecasted_vol is not None:
                 try:
@@ -298,8 +304,16 @@ def stochastic_analysis(analysis_result, n_simulations=1000, forecast_days = 30,
             simulations = np.zeros((n_simulations, forecast_days + 1))
             simulations[:, 0] = current_price
 
+            forecasted_vols = best_garch['forecasted_volatility']
+            if len(forecasted_vols) < forecast_days:
+                long_term_vol = gbm_params['sigma_daily']
+            else:
+                long_term_vol = gbm_params['sigma_daily']
             for t in range(1, forecast_days + 1):
-                vol = best_garch['forecasted_volatility'][t-1]
+                if t-1 < len(forecasted_vols):
+                    vol = forecasted_vols[t-1]
+                else:
+                    vol = long_term_vol
                 random_shocks = np.random.normal(0,1,n_simulations)
                 drift = (gbm_params['mu_daily'] - 0.5 * vol**2)
                 diffusion = vol * random_shocks
