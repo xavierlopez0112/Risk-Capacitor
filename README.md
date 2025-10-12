@@ -76,6 +76,7 @@ I learned a lot building this such as equations from Stochastic Calculus, Basic 
 - [Finnhub News](https://finnhub.io/) - News
 - [YFinance Screeners](https://finance.yahoo.com/research-hub/screener) - Used for inputting stocks
 - [Finbert Sentiment Analysis](https://huggingface.co/ProsusAI/finbert?text=Stocks+rallied+and+the+British+pound+gained.) - Analyze News Sentiment
+- [Data Analysis Book](Python for Data Analysis: Data Wrangling with Pandas, NumPy, and IPython by Wes McKinney)
 
 
 
