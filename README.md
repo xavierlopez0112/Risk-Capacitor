@@ -76,6 +76,8 @@ I learned a lot building this such as equations from Stochastic Calculus, Basic 
 - [Finnhub News](https://finnhub.io/) - News
 - [YFinance Screeners](https://finance.yahoo.com/research-hub/screener) - Used for inputting stocks
 - [Finbert Sentiment Analysis](https://huggingface.co/ProsusAI/finbert?text=Stocks+rallied+and+the+British+pound+gained.) - Analyze News Sentiment
+- [Sharpe Ratio](https://www.youtube.com/watch?v=9HD6xo2iO1g&t=3s) - Understanding Sharpe Ratio
+- [Volatility Models](https://www.youtube.com/watch?v=P-_3M1LnIa8&t=157s) - GARCH/ARCH
 - [Data Analysis Book](Python for Data Analysis: Data Wrangling with Pandas, NumPy, and IPython by Wes McKinney)
 
 
