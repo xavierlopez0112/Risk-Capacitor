@@ -128,7 +128,7 @@ class StockBacktester:
                 }
                 
                 results.append(result)
-                print("backtest worked")
+                print("Backtest Worked")
                 
             except Exception as e:
                 print(f"Error running backtest: {e}")
@@ -457,7 +457,3 @@ class StockBacktester:
         
         plt.tight_layout()
         plt.show()
-        
-
-
-    

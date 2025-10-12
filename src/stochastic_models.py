@@ -43,8 +43,7 @@ def gbm_simulation(S0, mu, sigma, T, dt, n_simulations=1000):
         simulations[:, t] = simulations[:, t-1] * np.exp(drift + diffusion)
     return simulations
 
-def garch_volatility_forecast(log_returns, forecast_days=30):
-
+def garch_volatility_forecast(log_returns, forecast_days=30,verbose = False):
     try:
         returns_pct = log_returns * 100
 
@@ -69,13 +68,14 @@ def garch_volatility_forecast(log_returns, forecast_days=30):
         forecasted_vol = np.sqrt(forecasted_vars) / 100
         cond_var_original = cond_var ** 2 / 10000
 
-        print(f"\nGARCH(1,1) Parameters (arch package):")
-        print(f"  ω (omega): {omega:.6f}")
-        print(f"  α (alpha): {alpha:.6f}")
-        print(f"  β (beta): {beta:.6f}")
-        print(f"  Persistence (α+β): {alpha + beta:.6f}")
-        print(f"  AIC: {fitted_model.aic:.2f}")
-        print(f"  BIC: {fitted_model.bic:.2f}")
+        if verbose:
+            print(f"\nGARCH(1,1) Parameters (arch package):")
+            print(f"  ω (omega): {omega:.6f}")
+            print(f"  α (alpha): {alpha:.6f}")
+            print(f"  β (beta): {beta:.6f}")
+            print(f"  Persistence (α+β): {alpha + beta:.6f}")
+            print(f"  AIC: {fitted_model.aic:.2f}")
+            print(f"  BIC: {fitted_model.bic:.2f}")
 
         return {
             'conditional_variance': cond_var_original,
@@ -88,7 +88,8 @@ def garch_volatility_forecast(log_returns, forecast_days=30):
             'method': 'arch_package'
         }
     except Exception as e:
-        print(f"Garch estimation with ARCH failed: {e}")
+        if verbose:
+            print(f"Garch estimation with ARCH failed: {e}")
 
         try:
             returns = log_returns - np.mean(log_returns)
@@ -106,14 +107,12 @@ def garch_volatility_forecast(log_returns, forecast_days=30):
             for t in range(1, n):
                 cond_var[t] = omega + alpha * returns[t-1]**2 + beta * cond_var[t-1]
             
-            # Forecast volatility
             last_return = returns[-1]
             last_var = cond_var[-1]
             
             forecasted_vars = np.zeros(forecast_days)
             forecasted_vars[0] = omega + alpha * last_return**2 + beta * last_var
             
-            # Multi-step ahead forecast
             for t in range(1, forecast_days):
                 forecasted_vars[t] = omega + (alpha + beta) * forecasted_vars[t-1]
             
@@ -129,8 +128,8 @@ def garch_volatility_forecast(log_returns, forecast_days=30):
             }
             
         except Exception as e:
-            print(f"GARCH estimation failed: {e}")
-            # Fallback to constant volatility
+            if verbose:
+                print(f"GARCH estimation failed: {e}")
             constant_vol = np.std(log_returns)
             return {
                 'conditional_variances': None,
@@ -246,20 +245,21 @@ def compare_garch_models(log_returns, forecast_days=30):
     
 
 
-def stochastic_analysis(analysis_result, n_simulations=1000, forecast_days = 30, compare_models=False):
+def stochastic_analysis(analysis_result, n_simulations=1000, forecast_days = 30, compare_models=False, verbose = False):
     try:
         closing_prices = analysis_result['closing_prices']
         symbol = analysis_result['symbol']
         current_price = analysis_result['current_price']
-
-        print(f"\nRunning Stochastic Analysis for {symbol}....")
+        if verbose:
+            print(f"\nRunning Stochastic Analysis for {symbol}....")
 
         gbm_params = estimate_gbm_params(closing_prices)
-        print(f"GBM Parameters:")
-        print(f"  Daily drift (μ): {gbm_params['mu_daily']:.4f}")
-        print(f"  Daily volatility (σ): {gbm_params['sigma_daily']:.4f}")
-        print(f"  Annual drift: {gbm_params['mu_annual']:.2%}")
-        print(f"  Annual volatility: {gbm_params['sigma_annual']:.2%}")
+        if verbose:
+            print(f"GBM Parameters:")
+            print(f"  Daily drift (μ): {gbm_params['mu_daily']:.4f}")
+            print(f"  Daily volatility (σ): {gbm_params['sigma_daily']:.4f}")
+            print(f"  Annual drift: {gbm_params['mu_annual']:.2%}")
+            print(f"  Annual volatility: {gbm_params['sigma_annual']:.2%}")
         
         best_garch = None
         comparison_df = None
@@ -281,7 +281,8 @@ def stochastic_analysis(analysis_result, n_simulations=1000, forecast_days = 30,
             best_garch=None
             garch_result = None
         if best_garch is None or not isinstance(best_garch, dict):
-            print("Warning: GARCH fitting failed, using constant volatility fallback")
+            if verbose:
+                print("Using constant volatility fallback over GARCH")
             constant_vol = gbm_params['sigma_daily']
             best_garch = {
                 'forecasted_volatility': [constant_vol] * forecast_days,
@@ -354,14 +355,15 @@ def stochastic_analysis(analysis_result, n_simulations=1000, forecast_days = 30,
             'prob_gain_5pct': np.mean(final_prices > current_price * 1.05),
             'prob_gain_10pct': np.mean(final_prices > current_price * 1.10)
         }
-        print(f"\n30-Day Stochastic Forecast Results:")
-        print(f"  Expected price: ${final_stats['mean_price']:.2f}")
-        print(f"  Median price: ${final_stats['median_price']:.2f}")
-        print(f"  Price range: ${final_stats['min_price']:.2f} - ${final_stats['max_price']:.2f}")
-        print(f"  Probability of profit: {final_stats['prob_profit']:.1%}")
-        print(f"  Probability of >5% gain: {final_stats['prob_gain_5pct']:.1%}")
-        print(f"  Probability of >5% loss: {final_stats['prob_loss_5pct']:.1%}")
-        
+        if verbose:
+            print(f"\n30-Day Stochastic Forecast Results:")
+            print(f"  Expected price: ${final_stats['mean_price']:.2f}")
+            print(f"  Median price: ${final_stats['median_price']:.2f}")
+            print(f"  Price range: ${final_stats['min_price']:.2f} - ${final_stats['max_price']:.2f}")
+            print(f"  Probability of profit: {final_stats['prob_profit']:.1%}")
+            print(f"  Probability of >5% gain: {final_stats['prob_gain_5pct']:.1%}")
+            print(f"  Probability of >5% loss: {final_stats['prob_loss_5pct']:.1%}")
+            
         result = {
             'simulations': simulations,
             'gbm_params': gbm_params,

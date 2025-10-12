@@ -45,7 +45,8 @@ def create_model_predictor(symbol, forecast_horizon =252):
                 analysis_result,
                 n_simulations=20000,
                 forecast_days=forecast_horizon,
-                compare_models=False
+                compare_models=False,
+                verbose = False
             )
             
             if stochastic_result is None:
