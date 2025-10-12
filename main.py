@@ -250,27 +250,6 @@ def plot_selected_stock():
         except Exception as e:
             print(f"Error: {e}")
 
-def test_single_stock():
-    """Test function to debug a single stock"""
-    test_symbol = "AAPL"  # Use a major stock that should have news
-    print(f"Testing sentiment analysis for {test_symbol}...")
-    
-    try:
-        ticker = Ticker(test_symbol)
-        company_name = ticker.quote_type[test_symbol].get("longName", test_symbol)
-        print(f"Company name: {company_name}")
-        
-        sentiment_score, sentiment_label, num_articles = get_stock_sentiment(test_symbol, company_name)
-        print(f"Result: {sentiment_label} (score: {sentiment_score:.3f}, articles: {num_articles})")
-        
-    except Exception as e:
-        print(f"Error in test: {e}")
-    
-
-
-
-
-
 
 
 
@@ -286,15 +265,12 @@ def main():
         print(f"{'='*50}")
         print("1 For Manually Checking Stocks")
         print("2 For Automatic Top Stocks")
-        print("3 For Plotting Graphs")
         print("Q to Quit")
         choice = input("Choose Option 1 or 2 ").strip()
         if choice == "1":
             manual_analysis()   
         elif choice == "2":
             auto_stock_analysis()
-        elif choice =="3":
-            plot_selected_stock()
         elif choice.lower() =="q":
             break
         else:
