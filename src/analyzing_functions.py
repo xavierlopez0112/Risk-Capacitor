@@ -1,3 +1,6 @@
+#Used for all Equations + their Metrics
+
+
 from datetime import datetime, timedelta
 import yfinance as yf
 import numpy as np
