@@ -1,3 +1,4 @@
+#Imports
 import numpy as np
 from arch import arch_model
 import pandas as pd
