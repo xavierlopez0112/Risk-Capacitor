@@ -5,7 +5,7 @@ import pandas as pd
 
 
 
-
+#Functions
 def calculate_log_returns(prices):
     return np.log(prices[1:] / prices[:-1])
 
